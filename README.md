@@ -7,8 +7,25 @@
 |---|---|---|---|
 | GET | `/health` | 无 | 健康检查 |
 | POST | `/push` | `X-Token` | JSON 或表单；正文字段 `body`/`text`/`msg`/`content`，发送方 `from`/`sender`；自动提取 4-8 位验证码 |
-| GET | `/code?keyword=&since=` | `X-Token` | 返回最新一条未使用且未过期（`CODE_TTL`，默认 300 秒）的验证码并标记已用；无则 404。`keyword` 匹配短信内容或发送方，`since` 为 Unix 时间戳 |
+| GET | `/code?platform=&keyword=&since=` | `X-Token` | `platform` 精确匹配短信签名；返回最新一条未使用且未过期（`CODE_TTL`，默认 300 秒）的验证码并标记已用；无则 404。`keyword` 匹配短信内容或发送方，`since` 为 Unix 时间戳 |
 | GET | `/latest?n=10` | `X-Token` | 最近 n 条原始记录，调试用 |
+
+## 短信解析
+每条短信入库时解析两个字段：
+- `platform`：开头或结尾的签名 `【…】` / `[…]` 中的文字，没有签名则为 `null`
+- `sms_code`：优先取「验证码/校验码/动态码/code」后的 4-8 位数字（或含数字的字母数字组合），否则取正文中第一个 4-8 位数字
+
+示例：`【拼多多】验证码：600162，您正在验证拼多多管理后台手机号…` → `platform="拼多多"`, `sms_code="600162"`
+
+响应格式：
+```json
+// POST /push
+{"ok": true, "id": 1, "platform": "拼多多", "sms_code": "600162"}
+// GET /code?platform=拼多多
+{"platform": "拼多多", "sms_code": "600162", "sender": "106xxx", "body": "【拼多多】验证码：600162…", "created": 1760511600.0}
+// GET /latest：数组，每项 {id, sender, body, sms_code, platform, created, used}
+```
+旧版数据库（`code` 列）启动时会自动迁移为 `sms_code` 并新增 `platform` 列。
 
 ## 部署（外网电脑）
 ```bash
@@ -40,9 +57,9 @@ curl -X POST https://sms.<域名>/push -H "X-Token: $TOKEN" -H 'Content-Type: ap
 
 ## 内网使用
 ```bash
-curl -G https://sms.<域名>/code -H "X-Token: $TOKEN" --data-urlencode keyword=某平台
+curl -G https://sms.<域名>/code -H "X-Token: $TOKEN" --data-urlencode platform=拼多多
 ```
-Python 轮询见 `client_example.py`：触发发送验证码前记录 `since=time.time()`，再调用 `wait_code(url, token, keyword, since=since)`，避免取到旧验证码。
+Python 轮询见 `client_example.py`：触发发送验证码前记录 `since=time.time()`，再调用 `wait_code(url, token, platform="拼多多", since=since)`，避免取到旧验证码。
 
 ## 安全建议
 - `RELAY_TOKEN` 用 32 字节以上随机串，不要提交 `.env`。

@@ -29,7 +29,12 @@ def init_db():
     with db() as c:
         c.execute("""CREATE TABLE IF NOT EXISTS sms(
             id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, body TEXT,
-            code TEXT, created REAL, used INTEGER DEFAULT 0)""")
+            sms_code TEXT, platform TEXT, created REAL, used INTEGER DEFAULT 0)""")
+        cols = {r[1] for r in c.execute("PRAGMA table_info(sms)")}
+        if "code" in cols and "sms_code" not in cols:
+            c.execute("ALTER TABLE sms RENAME COLUMN code TO sms_code")
+        if "platform" not in cols:
+            c.execute("ALTER TABLE sms ADD COLUMN platform TEXT")
 
 
 def cleanup():
@@ -42,8 +47,24 @@ def auth(x_token: Optional[str]):
         raise HTTPException(401, "invalid token")
 
 
+KW = r"(?:验证码|校验码|动态码|code)"
+SIG_HEAD = re.compile(r"^\s*(?:【([^】]{1,30})】|\[([^\]]{1,30})\])")
+SIG_TAIL = re.compile(r"(?:【([^】]{1,30})】|\[([^\]]{1,30})\])\s*$")
+
+
+def extract_platform(body: str) -> Optional[str]:
+    for r in (SIG_HEAD, SIG_TAIL):
+        m = r.search(body)
+        if m:
+            return (m.group(1) or m.group(2)).strip() or None
+    return None
+
+
 def extract_code(body: str) -> Optional[str]:
-    m = re.search(r"(?:验证码|校验码|动态码|code)[^\d]{0,10}(\d{4,8})(?!\d)", body, re.I)
+    m = re.search(KW + r"[^\d]{0,10}(\d{4,8})(?!\d)", body, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(KW + r"[^A-Za-z0-9]{0,10}(?=[A-Za-z]*\d)([A-Za-z0-9]{4,8})(?![A-Za-z0-9])", body, re.I)
     if m:
         return m.group(1)
     m = CODE_RE.search(body)
@@ -97,30 +118,33 @@ async def push(request: Request, x_token: Optional[str] = Header(None)):
     sender = next((str(data[k]) for k in ("from", "sender") if data.get(k)), "")
     if not body:
         raise HTTPException(400, "empty body")
-    code = extract_code(body)
+    code, platform = extract_code(body), extract_platform(body)
     with db() as c:
-        cur = c.execute("INSERT INTO sms(sender,body,code,created) VALUES(?,?,?,?)",
-                        (sender, body, code, time.time()))
-    return {"ok": True, "id": cur.lastrowid, "code": code}
+        cur = c.execute("INSERT INTO sms(sender,body,sms_code,platform,created) VALUES(?,?,?,?,?)",
+                        (sender, body, code, platform, time.time()))
+    return {"ok": True, "id": cur.lastrowid, "platform": platform, "sms_code": code}
 
 
 @app.get("/code")
-def get_code(keyword: str = "", since: float = 0, x_token: Optional[str] = Header(None)):
+def get_code(keyword: str = "", since: float = 0, platform: Optional[str] = None, x_token: Optional[str] = Header(None)):
     auth(x_token)
     lo = max(since, time.time() - CODE_TTL)
     with db() as c:
         c.isolation_level = None
         c.execute("BEGIN IMMEDIATE")
-        row = c.execute(
-            "SELECT * FROM sms WHERE used=0 AND code IS NOT NULL AND created>=? "
-            "AND (body LIKE ? OR sender LIKE ?) ORDER BY created DESC LIMIT 1",
-            (lo, f"%{keyword}%", f"%{keyword}%")).fetchone()
+        sql = ("SELECT * FROM sms WHERE used=0 AND sms_code IS NOT NULL AND created>=? "
+               "AND (body LIKE ? OR sender LIKE ?)")
+        args = [lo, f"%{keyword}%", f"%{keyword}%"]
+        if platform:
+            sql += " AND platform=?"
+            args.append(platform)
+        row = c.execute(sql + " ORDER BY created DESC LIMIT 1", args).fetchone()
         if not row:
             c.execute("COMMIT")
             raise HTTPException(404, "no code")
         c.execute("UPDATE sms SET used=1 WHERE id=?", (row["id"],))
         c.execute("COMMIT")
-    return {"code": row["code"], "sender": row["sender"], "body": row["body"], "created": row["created"]}
+    return {"platform": row["platform"], "sms_code": row["sms_code"], "sender": row["sender"], "body": row["body"], "created": row["created"]}
 
 
 @app.get("/latest")
