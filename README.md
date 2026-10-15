@@ -15,7 +15,7 @@
 git clone https://github.com/chenyonghuang8-bot/sms.git && cd sms
 cp .env.example .env
 openssl rand -hex 32   # 把结果填到 .env 的 RELAY_TOKEN
-docker compose up -d --build                     # 只启动中转服务（仅本机 127.0.0.1:8080）
+docker compose up -d --build                     # 只启动中转服务（仅本机 127.0.0.1:2285）
 docker compose --profile tunnel up -d --build    # 同时启动 cloudflared 隧道
 ```
 数据保存在 `./data/sms.db`，旧记录（默认 24 小时，`KEEP_SECONDS`）定时清理。
@@ -23,7 +23,7 @@ docker compose --profile tunnel up -d --build    # 同时启动 cloudflared 隧�
 ## Cloudflare Tunnel 配置
 1. 域名托管在 Cloudflare。进入 Zero Trust → Networks → Tunnels → Create a tunnel → 选 Cloudflared。
 2. 复制给出的 token，填到 `.env` 的 `TUNNEL_TOKEN`。
-3. Public Hostname 添加：Subdomain `sms`，Domain 选你的域名，Service 类型 `HTTP`，URL `relay:8080`（即 `http://relay:8080`）。
+3. Public Hostname 添加：Subdomain `sms`，Domain 选你的域名，Service 类型 `HTTP`，URL `relay:2285`（即 `http://relay:2285`）。
 4. `docker compose --profile tunnel up -d`，访问 `https://sms.<域名>/health` 返回 `{"ok":true}` 即成功。外网电脑无需开放端口。
 
 ## 手机转发软件配置（如 SmsForwarder 的 Webhook）
@@ -52,5 +52,5 @@ Python 轮询见 `client_example.py`：触发发送验证码前记录 `since=tim
 ## 开发
 ```bash
 pip install -r requirements-dev.txt && pytest -q
-RELAY_TOKEN=dev DB_PATH=./data/dev.db uvicorn app.main:app --port 8080
+RELAY_TOKEN=dev DB_PATH=./data/dev.db uvicorn app.main:app --port 2285
 ```

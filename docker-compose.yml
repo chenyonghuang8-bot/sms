@@ -6,7 +6,7 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "127.0.0.1:8080:8080"   # 仅本机可访问，公网走 cloudflared
+      - "127.0.0.1:2285:2285"   # 仅本机可访问，公网走 cloudflared
   cloudflared:
     image: cloudflare/cloudflared:2024.12.2
     restart: unless-stopped
